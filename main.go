@@ -1,102 +1,68 @@
 package main
 
 import (
- "github.com/lucadev04/Eventtimer-backend/auth"
- "github.com/lucadev04/Eventtimer-backend/models"
- "github.com/gofiber/fiber/v2"
- "github.com/gofiber/fiber/v2/middleware/logger"
- "github.com/gofiber/fiber/v2/middleware/recover"
- "github.com/gofiber/fiber/v2/middleware/session"
- "log"
+	"log"
+
+	"github.com/gofiber/fiber/v2"
+	"github.com/gofiber/fiber/v2/middleware/cors"
+	"github.com/gofiber/fiber/v2/middleware/logger"
+	"github.com/gofiber/fiber/v2/middleware/recover"
+	"github.com/lucadev04/Eventtimer-backend/auth"
+	"github.com/lucadev04/Eventtimer-backend/models"
 )
 
-var store = session.New()
-
 func main() {
+	app := fiber.New()
 
- app := fiber.New()
+	// Middleware
+	app.Use(recover.New())
+	app.Use(logger.New())
 
- app.Use(recover.New())
- app.Use(logger.New())
+	// 🌍 CORS aktivieren – wichtig für getrennte Server
+	app.Use(cors.New(cors.Config{
+		AllowOrigins: "*", // Oder gezielt z. B. "http://localhost:5173"
+		AllowHeaders: "Origin, Content-Type, Accept, Authorization",
+	}))
 
- /* Home route */
- app.Get("/", func(c *fiber.Ctx) error {
-  sess, _ := store.Get(c)
-  errorMsg := sess.Get("signup_error")
-  sess.Delete("signup_error")
-  sess.Save()
+	// API-Routen (ohne HTML/Render)
+	api := app.Group("/api")
 
-  return c.Render("index", fiber.Map{
-   "signup_error": errorMsg,
-  })
- })
+	api.Post("/register", func(c *fiber.Ctx) error {
+		payload := new(models.User)
+		if err := c.BodyParser(payload); err != nil {
+			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Invalid request"})
+		}
 
- app.Post("/register", func(context *fiber.Ctx) error {
-  payload := new(models.User)
+		if models.UserExists(payload) {
+			return c.Status(fiber.StatusConflict).JSON(fiber.Map{"error": "User already exists"})
+		}
 
-  if err := context.BodyParser(payload); err != nil {
-   return err
-  }
-  sess, _ := store.Get(context)
+		result := models.CreateUser(payload)
+		if result.Error != nil {
+			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Could not create user"})
+		}
 
-  // Create the user if already does not exist
-  if models.UserExists(payload) == false {
-   // Add user to database
-   result := models.CreateUser(payload)
+		return c.Status(fiber.StatusCreated).JSON(fiber.Map{"message": "User created"})
+	})
 
-   if result.Error != nil {
-    return context.SendStatus(fiber.StatusCreated)
-   } else {
-    sess.Set("signup_error", "Unable to sign up")
-    sess.Save()
-   }
-  } else {
-   sess.Set("signup_error", "User already exists")
-   log.Println("User found")
-   sess.Save()
-   return context.Redirect("/")
-  }
+	api.Post("/login", func(c *fiber.Ctx) error {
+		payload := new(models.User)
+		if err := c.BodyParser(payload); err != nil {
+			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Invalid request"})
+		}
 
-  log.Println("Username:", payload.Username)
-  log.Println("Email:", payload.Email)
-  log.Println("Password:", payload.Password)
+		if auth.Login(payload) {
+			// JWT optional hier
+			return c.JSON(fiber.Map{"message": "Login successful"})
+		}
 
-  return context.SendString("Username: " + payload.Username + " Email: " + payload.Email + " Password: " + payload.Password)
- })
+		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": "Invalid credentials"})
+	})
 
- app.Get("/login", func(c *fiber.Ctx) error {
-  sess, _ := store.Get(c)
-  errorMsg := sess.Get("login_error")
-  sess.Delete("login_error")
-  sess.Save()
+	api.Get("/dashboard", func(c *fiber.Ctx) error {
+		return c.JSON(fiber.Map{"message": "This is the dashboard"})
+	})
 
-  return c.Render("login", fiber.Map{
-   "login_error": errorMsg,
-  })
- })
-
- app.Post("/signin", func(c *fiber.Ctx) error {
-  payload := new(models.User)
-
-  if err := c.BodyParser(payload); err != nil {
-   return err
-  }
-
-  userVerified := auth.Login(payload)
-  if userVerified {
-   return c.Redirect("/dashboard")
-  }
-
-  sess, _ := store.Get(c)
-  sess.Set("login_error", "Invalid username or password")
-  sess.Save()
-
-  return c.Redirect("/login")
- })
-
- app.Get("/dashboard", func(c *fiber.Ctx) error {
-  return c.SendString("This is the dashboard")
- })
-
- app.Listen(":8081")
+	// Server starten
+	log.Fatal(app.Listen(":8081"))
 }
